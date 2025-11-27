@@ -692,98 +692,134 @@ async def submit_answer(submit_url, quiz_url, answer):
     return response.json()
 
 async def process_quiz_chain(initial_url):
-    """Process a chain of quizzes"""
+    """Process a chain of quizzes and return results"""
     current_url = initial_url
     max_attempts = 15
     attempt = 0
     retry_count = {}
-    
+    all_results = []
+
     while current_url and attempt < max_attempts:
         attempt += 1
-        print(f"\n\n{'#'*60}")
-        print(f"### ATTEMPT {attempt} ###")
-        print(f"{'#'*60}\n")
-        
+        print(f"\n{'='*60}")
+        print(f"ATTEMPT {attempt}")
+        print(f"{'='*60}")
+
         try:
             submit_url, answer = await solve_quiz(current_url, attempt)
             result = await submit_answer(submit_url, current_url, answer)
-            
+
             print(f"\n{'='*60}")
             print(f"RESULT: {json.dumps(result, indent=2)}")
             print(f"{'='*60}")
-            
+
+            # Store result for response
+            attempt_result = {
+                "attempt": attempt,
+                "quiz_url": current_url,
+                "answer": answer,
+                "result": result
+            }
+            all_results.append(attempt_result)
+
             if result.get('correct'):
-                print("\n✓✓✓ Answer CORRECT! ✓✓✓")
+                print("✅ Answer CORRECT!")
                 current_url = result.get('url')
                 if not current_url:
-                    print("\n🎉 QUIZ CHAIN COMPLETED! 🎉")
-                    break
+                    print("🎉 QUIZ CHAIN COMPLETED!")
+                    return {
+                        "status": "completed",
+                        "total_attempts": attempt,
+                        "results": all_results,
+                        "final_result": result
+                    }
                 else:
-                    print(f"\n→ Moving to next quiz: {current_url}")
+                    print(f"➡️  Moving to next quiz: {current_url}")
                     retry_count[current_url] = 0
             else:
-                print(f"\n✗✗✗ Answer INCORRECT ✗✗✗")
+                print("❌ Answer INCORRECT")
                 print(f"Reason: {result.get('reason', 'No reason provided')}")
-                
+
                 next_url = result.get('url')
-                
                 if current_url not in retry_count:
                     retry_count[current_url] = 0
-                
+
                 if retry_count[current_url] < 2 and (not next_url or next_url == current_url):
                     retry_count[current_url] += 1
-                    print(f"\n🔄 RETRYING ({retry_count[current_url]}/2) with enhanced analysis...")
+                    print(f"🔄 RETRYING ({retry_count[current_url]}/2) with enhanced analysis...")
                     continue
-                
+
                 if next_url and next_url != current_url:
-                    print(f"\n→ Moving to next quiz: {next_url}")
+                    print(f"➡️  Moving to next quiz: {next_url}")
                     current_url = next_url
                     retry_count[current_url] = 0
                 else:
-                    print("\n⚠ No new URL provided and max retries reached. Stopping.")
-                    break
-        
+                    print("⛔ No new URL provided and max retries reached. Stopping.")
+                    return {
+                        "status": "failed",
+                        "total_attempts": attempt,
+                        "results": all_results,
+                        "final_result": result,
+                        "reason": "Max retries reached or no new URL"
+                    }
+
         except Exception as e:
-            print(f"\n❌ ERROR: {str(e)}")
+            print(f"❌ ERROR: {str(e)}")
             import traceback
             traceback.print_exc()
-            break
-        
+            return {
+                "status": "error",
+                "total_attempts": attempt,
+                "results": all_results,
+                "error": str(e)
+            }
+
         await asyncio.sleep(0.5)
-    
-    print(f"\n\n{'#'*60}")
+
+    print(f"\n{'='*60}")
     print(f"Quiz processing completed after {attempt} attempts")
-    print(f"{'#'*60}\n")
+    print(f"{'='*60}")
+
+    return {
+        "status": "max_attempts_reached",
+        "total_attempts": attempt,
+        "results": all_results
+    }
+
 
 @app.route('/quiz', methods=['POST'])
 def handle_quiz():
     """Handle incoming quiz requests"""
     try:
         data = request.get_json()
-        
+
         if not data:
             return jsonify({"error": "Invalid JSON"}), 400
-        
+
         if data.get('secret') != YOUR_SECRET:
             return jsonify({"error": "Invalid secret"}), 403
-        
+
         quiz_url = data.get('url')
         if not quiz_url:
             return jsonify({"error": "No URL provided"}), 400
-        
+
         print(f"\n{'='*60}")
-        print(f"Received quiz request:")
+        print("Received quiz request:")
         print(f"Email: {data.get('email')}")
         print(f"URL: {quiz_url}")
         print(f"{'='*60}\n")
-        
-        asyncio.run(process_quiz_chain(quiz_url))
-        
-        return jsonify({"status": "Processing quiz"}), 200
-    
+
+        # Process the quiz synchronously and get full results
+        results = asyncio.run(process_quiz_chain(quiz_url))
+
+        # Return JSON response with quiz results
+        return jsonify(results), 200
+
     except Exception as e:
         print(f"Error in handle_quiz: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e), "status": "error"}), 500
 
 @app.route('/test', methods=['GET'])
 def test():
